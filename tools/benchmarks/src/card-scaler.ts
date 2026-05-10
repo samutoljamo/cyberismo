@@ -299,7 +299,7 @@ export async function fastScaleProject(
       // Refresh the calculation engine so the addon's program store no
       // longer references the deleted cards.
       commands.project.cardsCache.clear();
-      await commands.project.cardsCache.populateFromPath(cardRoot);
+      await commands.project.populateCaches();
       await commands.project.calculationEngine.generate();
       const trimmedCount = commands.project.cards().length;
       console.error(
@@ -335,7 +335,7 @@ export async function fastScaleProject(
       const cardRoot = join(tmpDir, 'cardRoot');
       await trimToTarget(cardRoot, targetCount, postSeedCount, trimProtected);
       commands.project.cardsCache.clear();
-      await commands.project.cardsCache.populateFromPath(cardRoot);
+      await commands.project.populateCaches();
       await commands.project.calculationEngine.generate();
       const trimmedCount = commands.project.cards().length;
       console.error(
@@ -452,7 +452,7 @@ export async function fastScaleProject(
     // the cache from disk now or the caller's `commands.project.cards()`
     // will only see the seed instance.
     commands.project.cardsCache.clear();
-    await commands.project.cardsCache.populateFromPath(cardRoot);
+    await commands.project.populateCaches();
     // Re-run the calculation engine setup over the now-fully-populated cache
     // so the Clingo program store has facts for every replicated card. Without
     // this, callers who later run `buildProgram` / `solve` would only see the

@@ -1,10 +1,10 @@
 /**
- * Shared `gringo --output=smodels` invocation.
+ * Shared `gringo --output=intermediate` (ASPIF) invocation.
  *
- * Used by both the fixture generator (`generate-fixtures.ts`) and the binary
- * baseline runner (`binary-baseline.ts`). Writes the program to a tempfile,
- * runs gringo, and returns the resulting ASPIF/smodels text on stdout. The
- * tempdir is always cleaned up.
+ * Used by the fixture generator (`generate-fixtures.ts`) to produce the
+ * pre-grounded base for the `incremental` bench variant. Writes the program
+ * to a tempfile, runs gringo, and returns the resulting ASPIF text on stdout.
+ * The tempdir is always cleaned up.
  *
  * On failure, the thrown Error includes gringo's stderr so callers can see
  * the actual diagnostic (e.g. parse errors, undefined predicates) rather than
@@ -19,7 +19,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 /**
- * Grounds `baseProgram` via `gringo --output=smodels` and returns the
+ * Grounds `baseProgram` via `gringo --output=intermediate` and returns the
  * resulting ASPIF text. Throws on gringo failure with stderr included.
  */
 export async function groundToAspif(baseProgram: string): Promise<string> {
@@ -30,7 +30,7 @@ export async function groundToAspif(baseProgram: string): Promise<string> {
     // 1 GiB maxBuffer is empirically required at scale 50000.
     const result = await execFileAsync(
       'gringo',
-      [baseFile, '--output=smodels'],
+      [baseFile, '--output=intermediate'],
       { maxBuffer: 1024 * 1024 * 1024 },
     );
     return result.stdout;

@@ -664,12 +664,6 @@ def _plot_main_query_scaling(
         ax.set_xlabel("cards")
         ax.set_ylabel("total time (ms)")
 
-    # Linear y, log x: linear y honestly shows absolute timing at scale
-    # (log-y compresses the variant gap at large N); log x spreads our
-    # non-uniform scale grid so small-N detail isn't squashed.
-    for ax in panels.values():
-        ax.set_xscale("log")
-
     place_legend_below(fig, panels.values(), ncol=3)
     out = output_dir / f"main-{slug}-scaling.pdf"
     save_figure(fig, out)
@@ -726,7 +720,6 @@ def _plot_main_query_speedup(
         panel_title(ax, project, panels)
         ax.set_xlabel("cards")
         ax.set_ylabel("speedup vs. baseline (×)")
-        ax.set_xscale("log")
 
     place_legend_below(fig, panels.values(), ncol=3)
     out = output_dir / f"main-{slug}-speedup.pdf"
@@ -760,12 +753,6 @@ def plot_main_tree_scaling(df: pd.DataFrame, output_dir: Path) -> Path:
         panel_title(ax, project, panels)
         ax.set_xlabel("cards")
         ax.set_ylabel("total time (ms)")
-
-    # Linear y, log x: linear y honestly shows absolute timing at scale
-    # (log-y compresses the variant gap at large N); log x spreads our
-    # non-uniform scale grid so small-N detail isn't squashed.
-    for ax in panels.values():
-        ax.set_xscale("log")
 
     place_legend_below(fig, panels.values(), ncol=3)
     out = output_dir / "main-tree-scaling.pdf"
@@ -825,7 +812,6 @@ def plot_main_tree_speedup(df: pd.DataFrame, output_dir: Path) -> Path:
         panel_title(ax, project, panels)
         ax.set_xlabel("cards")
         ax.set_ylabel("speedup vs. baseline (×)")
-        ax.set_xscale("log")
 
     place_legend_below(fig, panels.values(), ncol=3)
     out = output_dir / "main-tree-speedup.pdf"
