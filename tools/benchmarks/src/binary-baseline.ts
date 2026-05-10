@@ -14,14 +14,32 @@ interface BinaryResult {
 /**
  * Runs clingo with the given args. Treats SAT/UNSAT/UNKNOWN exits (10/20/30)
  * as success and returns their stdout. Re-throws any other failure.
+ *
+ * Note: execFile attaches `.stdout: ''` to *every* error it surfaces, including
+ * spawn failures like ENOENT, so a naive `'stdout' in error` check would
+ * silently treat "clingo not on PATH" as a successful run with zero answer
+ * sets. We therefore differentiate by `.code`: numeric codes are clingo's exit
+ * status (success only on 10/20/30), string codes (ENOENT, EACCES, …) mean the
+ * process never ran and must be surfaced as an error.
  */
 async function runClingo(args: string[]): Promise<string> {
   try {
     const result = await execFileAsync('clingo', args);
     return result.stdout;
   } catch (error: unknown) {
-    if (error && typeof error === 'object' && 'stdout' in error) {
-      return (error as { stdout: string }).stdout;
+    if (error && typeof error === 'object' && 'code' in error) {
+      const code = (error as { code: unknown }).code;
+      if (
+        (code === 10 || code === 20 || code === 30) &&
+        'stdout' in error
+      ) {
+        return (error as { stdout: string }).stdout;
+      }
+      if (code === 'ENOENT') {
+        throw new Error(
+          'clingo binary not found on PATH. Install clingo or run the bench inside an environment that provides it (e.g. `distrobox enter cyberismo -- make bench`).',
+        );
+      }
     }
     throw error;
   }
