@@ -105,95 +105,57 @@ resultField(Key, Field, Value, DataType) :-
     not dataType(Key, Field, _),
     showField(Key, Field).
 
-% list
-childResult(Key, (Key, Field, Value), Field) :-
-    DataType = "list",
-    resultField(Key, Field, Value, DataType).
+% list — internal marker carries list-typed (Key, Field, Value) triples
+% from either the resultField/4 input or the legacy field+dataType+showField
+% input. Public childResult and the consequence rules are then derived from
+% the marker, so a user-defined childResult of the same shape doesn't
+% accidentally trigger list-expansion machinery.
+listField(Key, Field, Value) :-
+    resultField(Key, Field, Value, "list").
 
-resultField((Key, Field, Value), "value", Value, "shortText") :-
-    childResult(Key, (Key, Field, Value), Field),
-    resultField(Key, Field, Value, _).
-
-resultField((Key, Field, Value), "index", Index, "integer") :-
-    childResult(Key, (Key, Field, Value), Field),
-    resultField(Key, Field, Value, _),
-    field((Field, Value), "index", Index).
-
-resultField((Key, Field, Value), "displayName", EnumDisplayValue, "shortText") :-
-    childResult(Key, (Key, Field, Value), Field),
-    resultField(Key, Field, Value, _),
-    field((Field, Value), "enumDisplayValue", EnumDisplayValue).
-
-childResult(Key, (Key, Field, Value), Field) :-
+listField(Key, Field, Value) :-
     field(Key, Field, Value),
     dataType(Key, Field, "list"),
     showField(Key, Field).
 
+childResult(Key, (Key, Field, Value), Field) :-
+    listField(Key, Field, Value).
+
 resultField((Key, Field, Value), "value", Value, "shortText") :-
-    childResult(Key, (Key, Field, Value), Field),
-    field(Key, Field, Value),
-    not resultField(Key, Field, Value, "list"),
-    dataType(Key, Field, "list").
+    listField(Key, Field, Value).
 
 resultField((Key, Field, Value), "index", Index, "integer") :-
-    childResult(Key, (Key, Field, Value), Field),
-    field(Key, Field, Value),
-    dataType(Key, Field, "list"),
-    not resultField(Key, Field, Value, "list"),
+    listField(Key, Field, Value),
     field((Field, Value), "index", Index).
 
 resultField((Key, Field, Value), "displayName", EnumDisplayValue, "shortText") :-
-    childResult(Key, (Key, Field, Value), Field),
+    listField(Key, Field, Value),
+    field((Field, Value), "enumDisplayValue", EnumDisplayValue).
+
+% enum — same marker pattern. Note: enum's childObject key is (Key, Field),
+% so Value isn't stored in the marker key shape; we keep the marker
+% 3-arity (Key, Field, Value) so consequence rules can reference Value
+% directly without re-looking it up.
+enumField(Key, Field, Value) :-
+    resultField(Key, Field, Value, "enum").
+
+enumField(Key, Field, Value) :-
     field(Key, Field, Value),
-    dataType(Key, Field, "list"),
-    not resultField(Key, Field, Value, "list"),
-    field((Field, Value), "enumDisplayValue", EnumDisplayValue).
-
-% enum
-
-
-childObject(Key, (Key, Field), Field) :-
-    DataType = "enum",
-    resultField(Key, Field, _, DataType).
-
-resultField((Key, Field), "value", Value, "shortText") :-
-    childObject(Key, (Key, Field), Field),
-    resultField(Key, Field, Value, _).
-
-resultField((Key, Field), "index", Index, "integer") :-
-    childObject(Key, (Key, Field), Field),
-    resultField(Key, Field, Value, _),
-    field((Field, Value), "index", Index).
-
-resultField((Key, Field), "displayValue", EnumDisplayValue, "shortText") :-
-    childObject(Key, (Key, Field), Field),
-    resultField(Key, Field, Value, _),
-    field((Field, Value), "enumDisplayValue", EnumDisplayValue).
-
-
-childObject(Key, (Key, Field), Field) :-
-    field(Key, Field, _),
     dataType(Key, Field, "enum"),
     showField(Key, Field).
 
+childObject(Key, (Key, Field), Field) :-
+    enumField(Key, Field, _).
+
 resultField((Key, Field), "value", Value, "shortText") :-
-    childObject(Key, (Key, Field), Field),
-    field(Key, Field, Value),
-    not resultField(Key, Field, Value, "enum"),
-    dataType(Key, Field, "enum").
+    enumField(Key, Field, Value).
 
 resultField((Key, Field), "index", Index, "integer") :-
-    childObject(Key, (Key, Field), Field),
-    field(Key, Field, Value),
-    dataType(Key, Field, "enum"),
-    not resultField(Key, Field, Value, "enum"),
+    enumField(Key, Field, Value),
     field((Field, Value), "index", Index).
 
 resultField((Key, Field), "displayValue", EnumDisplayValue, "shortText") :-
-    childObject(Key, (Key, Field), Field),
-    field(Key, Field, Value),
-    dataType(Key, Field, "enum"),
-    not resultField(Key, Field, Value, "enum"),
+    enumField(Key, Field, Value),
     field((Field, Value), "enumDisplayValue", EnumDisplayValue).
 
 % Allow specifying up to 3 fields at the same time
