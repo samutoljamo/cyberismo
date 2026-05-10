@@ -12,6 +12,7 @@
 */
 #include "clingo_solver.h"
 
+#include <algorithm>
 #include <mutex>
 
 namespace node_clingo
@@ -78,25 +79,45 @@ namespace node_clingo
 
             std::vector<Clingo::Part> parts;
 
+            // Split programs by whether their AST has been pre-parsed:
+            //   - text-only (preParsing = false) -> control.add(): clingo's
+            //     internal parser feeds the grounder directly. No AST-node
+            //     allocation per rule, no ProgramBuilder round-trip.
+            //   - pre-parsed (preParsing = true)  -> AST builder: replays
+            //     cached AST::Node objects so the parse stage is skipped on
+            //     repeat solves. The builder is the only API that accepts
+            //     pre-built AST nodes.
+            // Mixing both within a single solve is supported: text adds happen
+            // first, then any cached AST is replayed inside with_builder.
+
+            for (const auto& program : query.programs)
+            {
+                if (program->ast_nodes.empty())
+                {
+                    currentKey = program->key;
+                    control.add("base", {}, program->content.c_str());
+                }
+            }
+
+            const bool anyAst = std::any_of(
+                query.programs.begin(),
+                query.programs.end(),
+                [](const auto& p) { return !p->ast_nodes.empty(); });
+
+            if (anyAst)
             {
                 std::lock_guard<std::mutex> lock(g_ast_mutex);
                 Clingo::AST::with_builder(control, [&](Clingo::AST::ProgramBuilder& builder) {
                     for (const auto& program : query.programs)
                     {
-                        currentKey = program->key;
-                        if (!program->ast_nodes.empty())
+                        if (program->ast_nodes.empty())
                         {
-                            for (const auto& node : program->ast_nodes)
-                            {
-                                builder.add(node);
-                            }
+                            continue;
                         }
-                        else
+                        currentKey = program->key;
+                        for (const auto& node : program->ast_nodes)
                         {
-                            Clingo::AST::parse_string(
-                                program->content.c_str(),
-                                [&builder](Clingo::AST::Node node) { builder.add(node); },
-                                logger);
+                            builder.add(node);
                         }
                     }
                 });
