@@ -22,9 +22,19 @@ interface BinaryResult {
  * status (success only on 10/20/30), string codes (ENOENT, EACCES, …) mean the
  * process never ran and must be surfaced as an error.
  */
+// Node's execFile default stdout buffer is 1 MiB. clingo's answer sets at
+// 50 k cards × hundreds of #show'd atoms easily exceed that, which would
+// surface as ERR_CHILD_PROCESS_STDIO_MAXBUFFER and the process gets killed
+// mid-run. 1 GiB is a generous overshoot — plenty of headroom for the
+// largest models we care about, and it stays an honest cap rather than
+// allowing unbounded growth.
+const CLINGO_MAX_BUFFER = 1024 * 1024 * 1024;
+
 async function runClingo(args: string[]): Promise<string> {
   try {
-    const result = await execFileAsync('clingo', args);
+    const result = await execFileAsync('clingo', args, {
+      maxBuffer: CLINGO_MAX_BUFFER,
+    });
     return result.stdout;
   } catch (error: unknown) {
     if (error && typeof error === 'object' && 'code' in error) {
