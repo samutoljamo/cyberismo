@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """Plot benchmark JSON output as PDF figures for the thesis evaluation chapter.
 
-Consumes JSON files produced by tools/benchmarks/src/bench-{caching,threading,main}.ts
-and emits the eight figures the thesis chapter expects, both as `.pdf` and as
-`.pgf` (the latter for `\\input` into the LaTeX document; requires lualatex).
+Consumes JSON files produced by
+tools/benchmarks/src/bench-{caching,threading,main,solver-stats}.ts and emits
+both the figures the thesis chapter expects (as `.pdf` and `.pgf`, the latter
+for `\\input`; requires lualatex) and the solver-stats LaTeX table fragment.
 
 Usage:
-    python plot.py all       <results-dir> <output-dir>
-    python plot.py caching   <results-dir> <output-dir>
-    python plot.py threading <results-dir> <output-dir>
-    python plot.py main      <results-dir> <output-dir>
+    python plot.py all          <results-dir> <output-dir>
+    python plot.py caching      <results-dir> <output-dir>
+    python plot.py threading    <results-dir> <output-dir>
+    python plot.py main         <results-dir> <output-dir>
+    python plot.py solver-stats <results-dir> <output-dir>
 
-<results-dir> contains caching.json / threading.json / main.json.
-<output-dir> is created if it does not already exist.
+<results-dir> contains caching.json / threading.json / main.json /
+solver-stats.json. <output-dir> is created if it does not already exist; the
+solver-stats table is written under <output-dir>/tables/.
 """
 from __future__ import annotations
 
@@ -1055,6 +1058,190 @@ def plot_main(results_dir: Path, output_dir: Path) -> list[Path]:
     return out
 
 
+# ── Solver-stats table ──────────────────────────────────────────────────────
+
+# Cells displayed in tab:solver-stats-ql. The columns of the rendered table
+# follow this ordering: outer key = project, inner key = scale; for each cell
+# we emit two columns (baseline, baseline+resultfield).
+_SOLVER_STATS_PROJECTS: list[str] = ["cyberismo-docs", "module-eu-cra"]
+_SOLVER_STATS_SCALES:   list[int] = [5000, 25000]
+_SOLVER_STATS_QUERY:    str       = "tree"
+_SOLVER_STATS_VARIANTS: list[str] = ["baseline", "baseline+resultfield"]
+
+# Rows. Variables/Constraints are clingo's SAT-solver-core counters; for the
+# Tight programs we benchmark they come out 0 across the board, so the row
+# is dropped via the zero-skip below.
+_SOLVER_STATS_ROWS: list[tuple[str, str]] = [
+    ("Rules",        "rules"),
+    ("Atoms",        "atoms"),
+    ("Bodies",       "bodies"),
+    ("Equivalences", "equivalences"),
+    ("Variables",    "variables"),
+    ("Constraints",  "constraints"),
+]
+
+# Short project labels used in the table header; the full names are spelled
+# out in the surrounding prose.
+_SOLVER_STATS_PROJECT_LABELS: dict[str, str] = {
+    "cyberismo-docs": r"\texttt{cyberismo-docs}",
+    "module-eu-cra":  r"\texttt{module-eu-cra}",
+}
+
+
+def _format_thousands(n: int) -> str:
+    """Format an integer with LaTeX thin-space thousand separators (211\\,301)."""
+    s = str(int(n))
+    sign = ""
+    if s.startswith("-"):
+        sign, s = "-", s[1:]
+    if len(s) <= 3:
+        return sign + s
+    # Group from the right in threes.
+    parts: list[str] = []
+    while len(s) > 3:
+        parts.append(s[-3:])
+        s = s[:-3]
+    parts.append(s)
+    return sign + r"\,".join(reversed(parts))
+
+
+def _format_scale(scale: int) -> str:
+    """Render a scale as `N=5\\,000` for table headers."""
+    return f"N={_format_thousands(scale)}"
+
+
+def emit_solver_stats_ql_table(results_dir: Path, output_dir: Path) -> Path:
+    """Emit tab:solver-stats-ql as a LaTeX fragment.
+
+    Reads `solver-stats.json` from `results_dir`, builds a multi-cell table
+    over the cross product of projects × scales × variants defined by the
+    module-level constants, and writes `<output_dir>/tables/solver-stats-ql.tex`.
+
+    The fragment is the complete inner `tabular` (including `\\begin{tabular}`
+    and `\\end{tabular}`) because the column count depends on the data. The
+    caller wraps it in `\\begin{table}` / `\\caption` / `\\label` /
+    `\\resizebox{\\linewidth}{!}{...}`.
+
+    Rows that are zero in every cell are dropped so the bench, not the
+    emitter, stays the source of truth on which statistics are meaningful.
+    """
+    json_path = results_dir / "solver-stats.json"
+    try:
+        with json_path.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except FileNotFoundError:
+        raise PlotInputError(f"error: {json_path} not found")
+    except json.JSONDecodeError as exc:
+        raise PlotInputError(f"error: {json_path} is not valid JSON: {exc.msg}")
+
+    runs = payload.get("runs")
+    if not runs:
+        raise PlotInputError(f"error: {json_path} has no 'runs' key")
+
+    # Index runs by (project, scale, variant) for the chosen query.
+    index: dict[tuple[str, int, str], dict] = {}
+    for r in runs:
+        if r.get("query") != _SOLVER_STATS_QUERY:
+            continue
+        key = (r.get("project"), r.get("cardCount"), r.get("variant"))
+        index[key] = r
+
+    # Verify the full grid is present.
+    missing: list[str] = []
+    for project in _SOLVER_STATS_PROJECTS:
+        for scale in _SOLVER_STATS_SCALES:
+            for variant in _SOLVER_STATS_VARIANTS:
+                if (project, scale, variant) not in index:
+                    missing.append(
+                        f"project={project} scale={scale} variant={variant}"
+                    )
+    if missing:
+        raise PlotInputError(
+            f"solver-stats.json is missing required cells for "
+            f"tab:solver-stats-ql (query={_SOLVER_STATS_QUERY}): "
+            + "; ".join(missing)
+        )
+
+    # Column count and layout. Per data cell (project, scale) we render two
+    # variant columns side by side. Total columns: 1 label + 2 × |projects| × |scales|.
+    n_variant_cols = len(_SOLVER_STATS_VARIANTS)
+    n_data_cols = len(_SOLVER_STATS_PROJECTS) * len(_SOLVER_STATS_SCALES) * n_variant_cols
+    col_spec = "l" + "r" * n_data_cols
+
+    # Header row 1: project group (spans scales × variants).
+    project_span = len(_SOLVER_STATS_SCALES) * n_variant_cols
+    project_cells: list[str] = []
+    project_rules: list[str] = []
+    col = 2  # 1 is the label column; data starts at column 2.
+    for project in _SOLVER_STATS_PROJECTS:
+        project_cells.append(
+            f"\\multicolumn{{{project_span}}}{{c}}{{{_SOLVER_STATS_PROJECT_LABELS[project]}}}"
+        )
+        project_rules.append(f"\\cmidrule(lr){{{col}-{col + project_span - 1}}}")
+        col += project_span
+
+    # Header row 2: scale group (spans variants).
+    scale_cells: list[str] = []
+    scale_rules: list[str] = []
+    col = 2
+    for _project in _SOLVER_STATS_PROJECTS:
+        for scale in _SOLVER_STATS_SCALES:
+            scale_cells.append(
+                f"\\multicolumn{{{n_variant_cols}}}{{c}}{{{_format_scale(scale)}}}"
+            )
+            scale_rules.append(f"\\cmidrule(lr){{{col}-{col + n_variant_cols - 1}}}")
+            col += n_variant_cols
+
+    # Header row 3: per-variant labels.
+    variant_short = {"baseline": "base.", "baseline+resultfield": "+rf"}
+    variant_cells = [
+        variant_short[v]
+        for _project in _SOLVER_STATS_PROJECTS
+        for _scale in _SOLVER_STATS_SCALES
+        for v in _SOLVER_STATS_VARIANTS
+    ]
+
+    lines: list[str] = [
+        "% Auto-generated by tools/benchmarks/scripts/plot.py.",
+        "% Source: solver-stats.json. "
+        f"query={_SOLVER_STATS_QUERY} "
+        f"projects={','.join(_SOLVER_STATS_PROJECTS)} "
+        f"scales={','.join(str(s) for s in _SOLVER_STATS_SCALES)} "
+        f"variants={','.join(_SOLVER_STATS_VARIANTS)}.",
+        "% Do not edit by hand — regenerate via `make plots install-tables`.",
+        f"\\begin{{tabular}}{{{col_spec}}}",
+        r"\toprule",
+        " & " + " & ".join(project_cells) + r" \\",
+        " ".join(project_rules),
+        " & " + " & ".join(scale_cells) + r" \\",
+        " ".join(scale_rules),
+        r"\textbf{Statistic} & " + " & ".join(f"\\textbf{{{v}}}" for v in variant_cells) + r" \\",
+        r"\midrule",
+    ]
+
+    # Data rows. Drop any row whose values are all zero across the grid.
+    for label, key in _SOLVER_STATS_ROWS:
+        values: list[int] = []
+        for project in _SOLVER_STATS_PROJECTS:
+            for scale in _SOLVER_STATS_SCALES:
+                for variant in _SOLVER_STATS_VARIANTS:
+                    values.append(int(index[(project, scale, variant)].get(key, 0)))
+        if all(v == 0 for v in values):
+            continue
+        lines.append(
+            f"{label:<13} & " + " & ".join(_format_thousands(v) for v in values) + r" \\"
+        )
+
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}")
+
+    out_dir = output_dir / "tables"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "solver-stats-ql.tex"
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out_path
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 def cmd_caching(args: argparse.Namespace) -> int:
@@ -1090,6 +1277,16 @@ def cmd_main(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_solver_stats(args: argparse.Namespace) -> int:
+    try:
+        path = emit_solver_stats_ql_table(args.results_dir, args.output_dir)
+    except PlotInputError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(path)
+    return 0
+
+
 def cmd_all(args: argparse.Namespace) -> int:
     out: list[Path] = []
     # Per-feature input failures should not abort the whole batch — skip the
@@ -1104,6 +1301,12 @@ def cmd_all(args: argparse.Namespace) -> int:
         except PlotInputError as exc:
             print(str(exc), file=sys.stderr)
             print(f"warning: skipped {feature_name} feature", file=sys.stderr)
+    # Tables. Single-path emitter; wrapped in a list for uniform handling.
+    try:
+        out.append(emit_solver_stats_ql_table(args.results_dir, args.output_dir))
+    except PlotInputError as exc:
+        print(str(exc), file=sys.stderr)
+        print("warning: skipped solver-stats table", file=sys.stderr)
     for p in out:
         print(p)
     return 0
@@ -1134,6 +1337,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_main = sub.add_parser("main", help="Generate main-scaling figures")
     add_paths(p_main)
     p_main.set_defaults(func=cmd_main)
+
+    p_stats = sub.add_parser(
+        "solver-stats",
+        help="Generate the QL solver-stats LaTeX table fragment",
+    )
+    add_paths(p_stats)
+    p_stats.set_defaults(func=cmd_solver_stats)
 
     return parser
 

@@ -30,7 +30,15 @@ export async function collectSolverStats(
 
   let stdout = '';
   try {
-    const result = await execFileAsync('clingo', [lpFile, '--stats=2']);
+    // clingo's --stats=2 line lives at the very end of stdout, after a
+    // potentially multi-MB stream of `info: atom does not occur in any rule
+    // head` warnings on larger fixtures. Node's default 1 MiB maxBuffer
+    // truncates those, leaving the stats block off the end and every parsed
+    // field at 0. Raise the cap so the buffered API doesn't silently drop
+    // the data we came for.
+    const result = await execFileAsync('clingo', [lpFile, '--stats=2'], {
+      maxBuffer: 256 * 1024 * 1024,
+    });
     stdout = result.stdout;
   } catch (error: unknown) {
     if (error && typeof error === 'object' && 'stdout' in error) {
