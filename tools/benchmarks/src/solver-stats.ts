@@ -1,0 +1,85 @@
+import { execFile } from 'node:child_process';
+import { writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
+export interface SolverStatistics {
+  groundingTimeSec: number;
+  solvingTimeSec: number;
+  totalTimeSec: number;
+  rules: number;
+  bodies: number;
+  atoms: number;
+  equivalences: number;
+  variables: number;
+  constraints: number;
+}
+
+/**
+ * Runs a program through `clingo --stats=2` and parses the output.
+ */
+export async function collectSolverStats(
+  program: string,
+): Promise<SolverStatistics> {
+  const tmpDir = await mkdtemp(join(tmpdir(), 'clingo-stats-'));
+  const lpFile = join(tmpDir, 'program.lp');
+  await writeFile(lpFile, program);
+
+  let stdout = '';
+  try {
+    // clingo's --stats=2 line lives at the very end of stdout, after a
+    // potentially multi-MB stream of `info: atom does not occur in any rule
+    // head` warnings on larger fixtures. Node's default 1 MiB maxBuffer
+    // truncates those, leaving the stats block off the end and every parsed
+    // field at 0. Raise the cap so the buffered API doesn't silently drop
+    // the data we came for.
+    const result = await execFileAsync('clingo', [lpFile, '--stats=2'], {
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    stdout = result.stdout;
+  } catch (error: unknown) {
+    if (error && typeof error === 'object' && 'stdout' in error) {
+      stdout = (error as { stdout: string }).stdout;
+    } else {
+      await rm(tmpDir, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  await rm(tmpDir, { recursive: true, force: true });
+
+  const parseFloat_ = (pattern: RegExp): number => {
+    const match = stdout.match(pattern);
+    return match ? parseFloat(match[1]) : 0;
+  };
+
+  const parseInt_ = (pattern: RegExp): number => {
+    const match = stdout.match(pattern);
+    return match ? parseInt(match[1], 10) : 0;
+  };
+
+  // Clingo's --stats=2 timing block looks like:
+  //   Time         : 0.078s (Solving: 0.00s 1st Model: 0.00s Unsat: 0.00s)
+  // There is no separate "Grounding" or "Total" line — the headline `Time`
+  // figure IS the total (grounding + solving + I/O), and the breakdown is
+  // inside the parentheses on the same line. We compute grounding as the
+  // residual after subtracting solving from the total.
+  const totalTimeSec = parseFloat_(/^Time\s*:\s*([\d.]+)s/m);
+  const solvingTimeSec = parseFloat_(/Solving:\s*([\d.]+)s/);
+  const groundingTimeSec = Math.max(0, totalTimeSec - solvingTimeSec);
+
+  return {
+    groundingTimeSec,
+    solvingTimeSec,
+    totalTimeSec,
+    rules: parseInt_(/Rules\s*:\s*(\d+)/),
+    bodies: parseInt_(/Bodies\s*:\s*(\d+)/),
+    atoms: parseInt_(/Atoms\s*:\s*(\d+)/),
+    equivalences: parseInt_(/Equivalences\s*:\s*(\d+)/),
+    variables: parseInt_(/Variables\s*:\s*(\d+)/),
+    constraints: parseInt_(/Constraints\s*:\s*(\d+)/),
+  };
+}
