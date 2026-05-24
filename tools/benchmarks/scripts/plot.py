@@ -825,7 +825,6 @@ def plot_main_tree_speedup(df: pd.DataFrame, output_dir: Path) -> Path:
 def _plot_phase_cell(
     cell: pd.DataFrame,
     target_variants: list[str],
-    title: str,
     out_path: Path,
 ) -> None:
     """Single phase-breakdown stacked bar for a (project, scale, query) cell."""
@@ -856,7 +855,6 @@ def _plot_phase_cell(
     ax.set_xticks(x)
     ax.set_xticklabels(means.index, rotation=15, ha="right")
     ax.set_ylabel("time (ms)")
-    ax.set_title(title)
     ax.legend(loc="best", title="phase")
     save_figure(fig, out_path)
 
@@ -951,13 +949,10 @@ def plot_main_phase_breakdown(df: pd.DataFrame, output_dir: Path) -> list[Path]:
     tree_sub = sub_all[sub_all["query"] == "tree"]
     for (project, scale), cell in tree_sub.groupby(["project", "cardCount"]):
         scale_int = int(scale)
-        title = (
-            f"Phase breakdown — {project_pretty(project)}, {scale_int} cards, tree query"
-        )
         out_path = (
             cell_dir / f"main-phase-breakdown-{project}-{scale_int}.pdf"
         )
-        _plot_phase_cell(cell, target_variants, title, out_path)
+        _plot_phase_cell(cell, target_variants, out_path)
         if out_path.exists():
             out_paths.append(out_path)
 
