@@ -4,7 +4,8 @@
 Consumes JSON files produced by
 tools/benchmarks/src/bench-{caching,threading,main,solver-stats}.ts and emits
 both the figures the thesis chapter expects (as `.pdf` and `.pgf`, the latter
-for `\\input`; requires lualatex) and the solver-stats LaTeX table fragment.
+for `\\input`; requires lualatex) and the solver-stats table fragments in
+both LaTeX (`.tex`) and Typst (`.typ`) flavors.
 
 Usage:
     python plot.py all          <results-dir> <output-dir>
@@ -236,10 +237,13 @@ def place_legend_below(fig: plt.Figure, axes: Iterable[plt.Axes], ncol: int) -> 
 
 
 def save_figure(fig: plt.Figure, out_path: Path) -> None:
-    """Save `fig` as <out_path>.pdf, .pgf, and a PNG mirror under png/.
+    """Save `fig` as <out_path>.pdf, .svg, .pgf, and a PNG mirror under png/.
 
-    `out_path` is expected to use the `.pdf` suffix; the `.pgf` companion is
-    derived via `with_suffix('.pgf')` so the thesis can `\\input` it directly.
+    `out_path` is expected to use the `.pdf` suffix; the `.svg` and `.pgf`
+    companions are derived via `with_suffix(...)`. SVG is the format the
+    Typst thesis consumes via `#image()`; PDF is kept for legacy/LaTeX
+    consumers and human inspection; PGF is kept for direct `\\input` in
+    LaTeX (deprecated but retained until the LaTeX source is fully removed).
     The PNG mirror lives under `<out_path.parent>/png/<name>.png` (preserving
     any per-category subdirectory layout) so `make-gallery.sh` and any
     side-by-side review tooling can render figures in a browser.
@@ -247,11 +251,13 @@ def save_figure(fig: plt.Figure, out_path: Path) -> None:
     The PGF write uses matplotlib's `pgf` backend per-savefig so the global
     backend stays on `pdf`. If the PGF write fails (typically because
     lualatex is not installed), a single warning is emitted to stderr for
-    the whole script invocation and PDF-only output continues.
+    the whole script invocation and PDF/SVG-only output continues.
     """
     global _PGF_WARNED
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, format="pdf", bbox_inches="tight")
+    svg_path = out_path.with_suffix(".svg")
+    fig.savefig(svg_path, format="svg", bbox_inches="tight")
     pgf_path = out_path.with_suffix(".pgf")
     try:
         fig.savefig(pgf_path, format="pgf", backend="pgf", bbox_inches="tight")
@@ -259,7 +265,7 @@ def save_figure(fig: plt.Figure, out_path: Path) -> None:
         if not _PGF_WARNED:
             print(
                 "warning: PGF output skipped because lualatex is not "
-                "available; only PDFs were written",
+                "available; only PDFs and SVGs were written",
                 file=sys.stderr,
             )
             _PGF_WARNED = True
@@ -1101,24 +1107,69 @@ def _format_thousands(n: int) -> str:
 
 
 def _format_scale(scale: int) -> str:
-    """Render a scale as `N=5\\,000` for table headers."""
+    """Render a scale as `N=5\\,000` for table headers (LaTeX)."""
     return f"N={_format_thousands(scale)}"
 
 
-def emit_solver_stats_ql_table(results_dir: Path, output_dir: Path) -> Path:
-    """Emit tab:solver-stats-ql as a LaTeX fragment.
+def _format_thousands_typst(n: int) -> str:
+    """Format an integer with Typst narrow nbsp thousand separators.
+
+    Emits the literal Typst markup `211#sym.space.nobreak.narrow#"783"` so
+    the rendered cells match the LaTeX `\\,`-grouped output.
+    """
+    s = str(int(n))
+    sign = ""
+    if s.startswith("-"):
+        sign, s = "-", s[1:]
+    if len(s) <= 3:
+        return sign + s
+    parts: list[str] = []
+    while len(s) > 3:
+        parts.append(s[-3:])
+        s = s[:-3]
+    parts.append(s)
+    groups = list(reversed(parts))
+    # First group is bare; subsequent groups are emitted as quoted strings so
+    # leading zeros (e.g. "051" in 1,051,783) survive Typst's content layer.
+    head, *tail = groups
+    return sign + head + "".join(
+        f'#sym.space.nobreak.narrow#"{g}"' for g in tail
+    )
+
+
+def _format_scale_typst(scale: int) -> str:
+    """Render a scale as `N=5#sym.space.nobreak.narrow#"000"` (Typst)."""
+    return f"N={_format_thousands_typst(scale)}"
+
+
+_SOLVER_STATS_PROJECT_LABELS_TYPST: dict[str, str] = {
+    "cyberismo-docs": "`cyberismo-docs`",
+    "module-eu-cra":  "`module-eu-cra`",
+}
+
+
+def emit_solver_stats_ql_table(results_dir: Path, output_dir: Path) -> tuple[Path, Path]:
+    """Emit tab:solver-stats-ql as LaTeX and Typst fragments.
 
     Reads `solver-stats.json` from `results_dir`, builds a multi-cell table
     over the cross product of projects × scales × variants defined by the
-    module-level constants, and writes `<output_dir>/tables/solver-stats-ql.tex`.
+    module-level constants, and writes both
+    `<output_dir>/tables/solver-stats-ql.tex` and
+    `<output_dir>/tables/solver-stats-ql.typ`.
 
-    The fragment is the complete inner `tabular` (including `\\begin{tabular}`
-    and `\\end{tabular}`) because the column count depends on the data. The
-    caller wraps it in `\\begin{table}` / `\\caption` / `\\label` /
-    `\\resizebox{\\linewidth}{!}{...}`.
+    The LaTeX fragment is the complete inner `tabular` (including
+    `\\begin{tabular}` and `\\end{tabular}`) because the column count
+    depends on the data. The caller wraps it in `\\begin{table}` /
+    `\\caption` / `\\label` / `\\resizebox{\\linewidth}{!}{...}`.
+
+    The Typst fragment is a bare `#table(...)` call. The caller wraps it
+    in `#figure(... kind: table, caption: ...)` and references it via a
+    `<tab:solver-stats-ql>` label.
 
     Rows that are zero in every cell are dropped so the bench, not the
     emitter, stays the source of truth on which statistics are meaningful.
+
+    Returns a `(tex_path, typ_path)` tuple.
     """
     json_path = results_dir / "solver-stats.json"
     try:
@@ -1157,8 +1208,32 @@ def emit_solver_stats_ql_table(results_dir: Path, output_dir: Path) -> Path:
             + "; ".join(missing)
         )
 
-    # Column count and layout. Per data cell (project, scale) we render two
-    # variant columns side by side. Total columns: 1 label + 2 × |projects| × |scales|.
+    # Filter rows to those with at least one non-zero cell across the grid.
+    # Computed once so both formatters render the same subset of rows.
+    rendered_rows: list[tuple[str, list[int]]] = []
+    for label, key in _SOLVER_STATS_ROWS:
+        values: list[int] = []
+        for project in _SOLVER_STATS_PROJECTS:
+            for scale in _SOLVER_STATS_SCALES:
+                for variant in _SOLVER_STATS_VARIANTS:
+                    values.append(int(index[(project, scale, variant)].get(key, 0)))
+        if all(v == 0 for v in values):
+            continue
+        rendered_rows.append((label, values))
+
+    out_dir = output_dir / "tables"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    tex_path = _emit_solver_stats_ql_table_latex(out_dir, rendered_rows)
+    typ_path = _emit_solver_stats_ql_table_typst(out_dir, rendered_rows)
+    return tex_path, typ_path
+
+
+def _emit_solver_stats_ql_table_latex(
+    out_dir: Path,
+    rendered_rows: list[tuple[str, list[int]]],
+) -> Path:
+    """Write the LaTeX `tabular` fragment for tab:solver-stats-ql."""
     n_variant_cols = len(_SOLVER_STATS_VARIANTS)
     n_data_cols = len(_SOLVER_STATS_PROJECTS) * len(_SOLVER_STATS_SCALES) * n_variant_cols
     col_spec = "l" + "r" * n_data_cols
@@ -1214,15 +1289,7 @@ def emit_solver_stats_ql_table(results_dir: Path, output_dir: Path) -> Path:
         r"\midrule",
     ]
 
-    # Data rows. Drop any row whose values are all zero across the grid.
-    for label, key in _SOLVER_STATS_ROWS:
-        values: list[int] = []
-        for project in _SOLVER_STATS_PROJECTS:
-            for scale in _SOLVER_STATS_SCALES:
-                for variant in _SOLVER_STATS_VARIANTS:
-                    values.append(int(index[(project, scale, variant)].get(key, 0)))
-        if all(v == 0 for v in values):
-            continue
+    for label, values in rendered_rows:
         lines.append(
             f"{label:<13} & " + " & ".join(_format_thousands(v) for v in values) + r" \\"
         )
@@ -1230,9 +1297,92 @@ def emit_solver_stats_ql_table(results_dir: Path, output_dir: Path) -> Path:
     lines.append(r"\bottomrule")
     lines.append(r"\end{tabular}")
 
-    out_dir = output_dir / "tables"
-    out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "solver-stats-ql.tex"
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out_path
+
+
+def _emit_solver_stats_ql_table_typst(
+    out_dir: Path,
+    rendered_rows: list[tuple[str, list[int]]],
+) -> Path:
+    """Write the Typst `#table(...)` fragment for tab:solver-stats-ql.
+
+    Mirrors the LaTeX layout: 1 label column + 2 × |projects| × |scales|
+    data columns, two header rows with column-group rules between scales
+    and between projects, then a per-variant label row.
+    """
+    n_variant_cols = len(_SOLVER_STATS_VARIANTS)
+    n_data_cols = len(_SOLVER_STATS_PROJECTS) * len(_SOLVER_STATS_SCALES) * n_variant_cols
+    total_cols = 1 + n_data_cols
+
+    # 0-indexed column ranges for table.hline(start:, end:); end is exclusive.
+    project_span = len(_SOLVER_STATS_SCALES) * n_variant_cols
+    project_header_cells: list[str] = []
+    project_hlines: list[str] = []
+    col = 1  # 0 is the label column; data starts at column 1.
+    for project in _SOLVER_STATS_PROJECTS:
+        project_header_cells.append(
+            f"table.cell(colspan: {project_span}, align: center)[{_SOLVER_STATS_PROJECT_LABELS_TYPST[project]}]"
+        )
+        project_hlines.append(
+            f"table.hline(start: {col}, end: {col + project_span}, stroke: 0.5pt)"
+        )
+        col += project_span
+
+    scale_header_cells: list[str] = []
+    scale_hlines: list[str] = []
+    col = 1
+    for _project in _SOLVER_STATS_PROJECTS:
+        for scale in _SOLVER_STATS_SCALES:
+            scale_header_cells.append(
+                f"table.cell(colspan: {n_variant_cols}, align: center)[{_format_scale_typst(scale)}]"
+            )
+            scale_hlines.append(
+                f"table.hline(start: {col}, end: {col + n_variant_cols}, stroke: 0.5pt)"
+            )
+            col += n_variant_cols
+
+    variant_short = {"baseline": "base.", "baseline+resultfield": "+rf"}
+    variant_header_cells = [
+        f"[*{variant_short[v]}*]"
+        for _project in _SOLVER_STATS_PROJECTS
+        for _scale in _SOLVER_STATS_SCALES
+        for v in _SOLVER_STATS_VARIANTS
+    ]
+
+    align_tuple = "(left, " + ", ".join(["right"] * n_data_cols) + ")"
+    columns_tuple = "(" + ", ".join(["auto"] * total_cols) + ")"
+
+    lines: list[str] = [
+        "// Auto-generated by tools/benchmarks/scripts/plot.py.",
+        "// Source: solver-stats.json. "
+        f"query={_SOLVER_STATS_QUERY} "
+        f"projects={','.join(_SOLVER_STATS_PROJECTS)} "
+        f"scales={','.join(str(s) for s in _SOLVER_STATS_SCALES)} "
+        f"variants={','.join(_SOLVER_STATS_VARIANTS)}.",
+        "// Do not edit by hand — regenerate via `make plots install-tables`.",
+        "#table(",
+        f"  columns: {columns_tuple},",
+        f"  align: {align_tuple},",
+        "  stroke: none,",
+        "  table.hline(),",
+        "  table.cell([]), " + ", ".join(project_header_cells) + ",",
+        "  " + ", ".join(project_hlines) + ",",
+        "  table.cell([]), " + ", ".join(scale_header_cells) + ",",
+        "  " + ", ".join(scale_hlines) + ",",
+        "  [*Statistic*], " + ", ".join(variant_header_cells) + ",",
+        "  table.hline(),",
+    ]
+
+    for label, values in rendered_rows:
+        formatted = ", ".join(f"[{_format_thousands_typst(v)}]" for v in values)
+        lines.append(f"  [{label}], {formatted},")
+
+    lines.append("  table.hline(),")
+    lines.append(")")
+
+    out_path = out_dir / "solver-stats-ql.typ"
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return out_path
 
@@ -1274,11 +1424,12 @@ def cmd_main(args: argparse.Namespace) -> int:
 
 def cmd_solver_stats(args: argparse.Namespace) -> int:
     try:
-        path = emit_solver_stats_ql_table(args.results_dir, args.output_dir)
+        paths = emit_solver_stats_ql_table(args.results_dir, args.output_dir)
     except PlotInputError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    print(path)
+    for path in paths:
+        print(path)
     return 0
 
 
@@ -1296,9 +1447,9 @@ def cmd_all(args: argparse.Namespace) -> int:
         except PlotInputError as exc:
             print(str(exc), file=sys.stderr)
             print(f"warning: skipped {feature_name} feature", file=sys.stderr)
-    # Tables. Single-path emitter; wrapped in a list for uniform handling.
+    # Tables. Emits both LaTeX and Typst fragments under the same call.
     try:
-        out.append(emit_solver_stats_ql_table(args.results_dir, args.output_dir))
+        out.extend(emit_solver_stats_ql_table(args.results_dir, args.output_dir))
     except PlotInputError as exc:
         print(str(exc), file=sys.stderr)
         print("warning: skipped solver-stats table", file=sys.stderr)
@@ -1335,7 +1486,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_stats = sub.add_parser(
         "solver-stats",
-        help="Generate the QL solver-stats LaTeX table fragment",
+        help="Generate the QL solver-stats LaTeX + Typst table fragments",
     )
     add_paths(p_stats)
     p_stats.set_defaults(func=cmd_solver_stats)
