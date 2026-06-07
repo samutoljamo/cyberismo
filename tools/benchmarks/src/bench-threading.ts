@@ -21,7 +21,7 @@ if (!fixturesDir) {
   process.exit(1);
 }
 
-const RUNS = 5; // number of Promise.all batches
+const RUNS = 10; // number of Promise.all batches
 const WARMUP_RUNS = 3; // individual warm-up solves
 const CONCURRENCY = 64; // simultaneous solves per batch
 const FEATURE = 'threading';
