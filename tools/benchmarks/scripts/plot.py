@@ -32,6 +32,7 @@ matplotlib.use("pdf")  # ensure non-GUI backend; vector PDF output
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib import ticker
 
 # ── Style ───────────────────────────────────────────────────────────────────
 
@@ -89,7 +90,7 @@ plt.rcParams.update({
     "axes.spines.top": False,
     "axes.spines.right": False,
     "legend.frameon": False,
-    "legend.fontsize": 9,
+    "legend.fontsize": 10,
     "axes.labelsize": 10,
     "axes.titlesize": 11,
     "xtick.labelsize": 9,
@@ -156,7 +157,7 @@ def project_pretty(name: str) -> str:
     mapping = {
         "decision": "cyberismo-docs",
         "docs": "cyberismo-docs",
-        "eucra": "eucra",
+        "eucra": "module-eu-cra",
     }
     return mapping.get(name, name)
 
@@ -359,6 +360,12 @@ def plot_caching(results_dir: Path, output_dir: Path) -> list[Path]:
         ax.set_ylabel("hit speedup (miss / hit)")
         ax.set_xscale("log")
         ax.set_yscale("log")
+        # The data spans less than a decade, so the default log locator
+        # labels at most two points; add intra-decade ticks so the peak and
+        # plateau have readable y references.
+        ax.yaxis.set_major_locator(ticker.LogLocator(base=10, subs=(1.0, 1.5, 2.0, 3.0, 4.0, 6.0)))
+        ax.yaxis.set_major_formatter(ticker.ScalarFormatter())
+        ax.yaxis.set_minor_formatter(ticker.NullFormatter())
 
     out = output_dir / "caching-hit-speedup.pdf"
     save_figure(fig, out)
@@ -585,7 +592,13 @@ def plot_threading(results_dir: Path, output_dir: Path) -> list[Path]:
 
     scales = sorted(solos["cardCount"].unique())
     n_scales = len(scales)
-    fig, axes = plt.subplots(1, n_scales, figsize=(3.0 * n_scales + 1, 4.2), sharey=False)
+    fig, axes = plt.subplots(
+        1,
+        n_scales,
+        figsize=(3.0 * n_scales + 1, 4.2),
+        sharey=False,
+        gridspec_kw={"wspace": 0.3},
+    )
     if n_scales == 1:
         axes = [axes]
 
@@ -603,7 +616,7 @@ def plot_threading(results_dir: Path, output_dir: Path) -> list[Path]:
                     & (solos["clingoVariant"] == cv)
                 ]
                 boxes.append(cell["totalMs"].to_numpy())
-                labels.append(kind if cv == "stock" else f"{kind}\n({cv})")
+                labels.append(kind if cv == "stock" else f"{kind} ({cv})")
                 colours_box.append(variant_colour(kind))
                 hatches.append("" if cv == "stock" else "///")
         bp = ax.boxplot(
@@ -624,6 +637,9 @@ def plot_threading(results_dir: Path, output_dir: Path) -> list[Path]:
                 patch.set_hatch(hatch)
         ax.set_title(f"{scale} cards")
         ax.set_yscale("log")
+        # Single-line variant labels are wider than the one-slot category
+        # spacing; rotate so adjacent labels cannot collide.
+        plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
 
     axes[0].set_ylabel("per-solve total time (ms)")
     out_lat = output_dir / "threading-latency.pdf"
