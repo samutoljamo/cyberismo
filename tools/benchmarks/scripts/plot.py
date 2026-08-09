@@ -67,6 +67,14 @@ VARIANT_ORDER_MAIN = [
 
 VARIANT_ORDER_CACHING = ["cache-disabled", "cache-enabled", "cache-miss", "cache-hit"]
 
+# Figures label Clingo builds by release; results keep the internal
+# clingoVariant tags ("stock", "mutexfix") so old and new JSONs stay mergeable.
+CLINGO_VARIANT_LABELS = {"stock": "5.8.0", "mutexfix": "5.8.1"}
+
+
+def clingo_variant_label(cv: str) -> str:
+    return CLINGO_VARIANT_LABELS.get(cv, cv)
+
 PHASE_COMPONENTS = ["glueUs", "addUs", "groundUs", "solveUs"]
 PHASE_LABELS = {
     "glueUs":   "glue",
@@ -459,10 +467,10 @@ def plot_threading(results_dir: Path, output_dir: Path) -> list[Path]:
         # Series carry the established colour/hatch convention: sync=grey,
         # async=blue, stock=solid, non-stock=hatched.
         series: list[tuple[str, str, str, str, str]] = []  # (label, kind, cv, colour, hatch)
-        series.append(("async (stock)", "async-batch", "stock", variant_colour("async-batch"), ""))
+        series.append((f"async ({clingo_variant_label('stock')})", "async-batch", "stock", variant_colour("async-batch"), ""))
         for nv in non_stock:
-            series.append((f"sync ({nv})", "sync-batch", nv, variant_colour("sync-batch"), "///"))
-            series.append((f"async ({nv})", "async-batch", nv, variant_colour("async-batch"), "///"))
+            series.append((f"sync ({clingo_variant_label(nv)})", "sync-batch", nv, variant_colour("sync-batch"), "///"))
+            series.append((f"async ({clingo_variant_label(nv)})", "async-batch", nv, variant_colour("async-batch"), "///"))
 
         bar_width = 0.8 / len(series)
         for project, ax in panels.items():
@@ -506,7 +514,7 @@ def plot_threading(results_dir: Path, output_dir: Path) -> list[Path]:
             ax.set_xticks(positions)
             ax.set_xticklabels([str(s) for s in scales])
             ax.set_xlabel("cards")
-            ax.set_ylabel("speedup vs stock sync")
+            ax.set_ylabel(f"speedup vs {clingo_variant_label('stock')} sync")
             ax.axhline(1.0, color="black", linewidth=0.6, linestyle="--", alpha=0.5)
             panel_title(ax, project, panels)
 
@@ -571,7 +579,7 @@ def plot_threading(results_dir: Path, output_dir: Path) -> list[Path]:
                 linestyle=linestyle,
                 color=variant_colour("async") if cv == "stock" else variant_colour("c-api+resultfield"),
                 linewidth=1.5,
-                label=cv,
+                label=clingo_variant_label(cv),
             )
         ax.set_xscale("log")
         ax.axhline(1.0, color="black", linewidth=0.6, linestyle="--", alpha=0.5)
@@ -616,7 +624,7 @@ def plot_threading(results_dir: Path, output_dir: Path) -> list[Path]:
                     & (solos["clingoVariant"] == cv)
                 ]
                 boxes.append(cell["totalMs"].to_numpy())
-                labels.append(kind if cv == "stock" else f"{kind} ({cv})")
+                labels.append(kind if len(cv_present) == 1 else f"{kind} ({clingo_variant_label(cv)})")
                 colours_box.append(variant_colour(kind))
                 hatches.append("" if cv == "stock" else "///")
         bp = ax.boxplot(
