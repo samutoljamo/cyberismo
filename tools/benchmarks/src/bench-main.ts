@@ -62,11 +62,13 @@ if (!fixturesDir) {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const RUNS_PER_POINT = 10;
-// Per-variant warmup: discard the first N solves after each context state
-// change (replaceContext, swapToOldQL). Absorbs the one-shot cost of the
-// addon/macro pipeline populating its caches on the new context — without
-// this, the first run's wall-clock contaminates the cell's std and produces
-// the negative-going error bands seen in early runs.
+// Per-variant warmup: discard the first N solves at the start of every
+// variant. For native variants this absorbs the one-shot cost of the
+// addon/macro pipeline populating its caches after a context state change
+// (replaceContext, swapToOldQL) — without this, the first run's wall-clock
+// contaminates the cell's std and produces the negative-going error bands
+// seen in early runs. Binary variants have no such state, but the identical
+// treatment keeps the measurement protocol uniform across variants.
 const VARIANT_WARMUP = 2;
 const WARMUP_RUNS = 3;
 const FEATURE = 'main-scaling';
@@ -217,6 +219,15 @@ async function runFixture(
   try {
     // ── VARIANT: baseline (binary + old QL) ────────────────────────────────
     console.error('  variant: baseline');
+    {
+      const warmupProgram = await readFile(
+        programPath(bundle, 'baseline', 'tree'),
+        'utf-8',
+      );
+      for (let i = 0; i < VARIANT_WARMUP; i++) {
+        await solveBinary(warmupProgram);
+      }
+    }
     for (const queryName of queries) {
       const program = await readFile(
         programPath(bundle, 'baseline', queryName),
@@ -233,6 +244,15 @@ async function runFixture(
 
     // ── VARIANT: baseline+resultfield (binary + current QL) ────────────────
     console.error('  variant: baseline+resultfield');
+    {
+      const warmupProgram = await readFile(
+        programPath(bundle, 'baseline+resultfield', 'tree'),
+        'utf-8',
+      );
+      for (let i = 0; i < VARIANT_WARMUP; i++) {
+        await solveBinary(warmupProgram);
+      }
+    }
     for (const queryName of queries) {
       const program = await readFile(
         programPath(bundle, 'baseline+resultfield', queryName),
@@ -344,6 +364,15 @@ async function runFixture(
     const aspifPath = join(aspifTmpDir, 'incremental-base.aspif');
     await copyFile(incrementalAspifPath(bundle), aspifPath);
     try {
+      const warmupProgram =
+        lpFiles.common.queryLanguage +
+        '\n' +
+        lpFiles.common.utils +
+        '\n' +
+        bundle.queries.tree;
+      for (let i = 0; i < VARIANT_WARMUP; i++) {
+        await solveAspifWithQuery(aspifPath, warmupProgram);
+      }
       for (const queryName of queries) {
         const specificQuery = bundle.queries[queryName];
         if (!specificQuery) continue;

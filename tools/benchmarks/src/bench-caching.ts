@@ -83,18 +83,12 @@ async function main() {
       const treeQuery = bundle.queries.tree;
 
       try {
-        // Per-cell warmup: a few throwaway solves through each path so the
-        // first measurement isn't contaminated by JIT / addon-state setup.
-        // Without this, cache-disabled (which runs first in each cell) has
-        // measurements that include first-solve cost while cache-miss gets
-        // the warm path.
+        // Per-variant warmup: discard the first VARIANT_WARMUP solves at the
+        // start of each solve path so the first measurement isn't
+        // contaminated by JIT / addon-state setup.
         const VARIANT_WARMUP = 2;
         for (let i = 0; i < VARIANT_WARMUP; i++) {
           await ctx.solve(treeQuery, ['all'], { cache: false });
-        }
-        clearCache();
-        for (let i = 0; i < VARIANT_WARMUP; i++) {
-          await ctx.solve(treeQuery, ['all']);
         }
 
         // ── cache-disabled: bypass cache via { cache: false } ─────────────
@@ -117,6 +111,12 @@ async function main() {
             totalUs: s.glue + s.add + s.ground + s.solve,
             cacheHit: s.cacheHit,
           });
+        }
+
+        // Warmup for the cached path before its variants start.
+        clearCache();
+        for (let i = 0; i < VARIANT_WARMUP; i++) {
+          await ctx.solve(treeQuery, ['all']);
         }
 
         // ── cache-miss followed immediately by cache-hit ──────────────────
@@ -171,9 +171,7 @@ async function main() {
         elapsedMs,
         completedAt: new Date().toISOString(),
       });
-      console.error(
-        `    cell elapsed=${(elapsedMs / 1000).toFixed(1)}s`,
-      );
+      console.error(`    cell elapsed=${(elapsedMs / 1000).toFixed(1)}s`);
 
       // Flush partial results after each cell so the JSON can be inspected
       // with `jq` / plot.py while the bench is still running.

@@ -649,7 +649,7 @@ def plot_threading(results_dir: Path, output_dir: Path) -> list[Path]:
         # spacing; rotate so adjacent labels cannot collide.
         plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
 
-    axes[0].set_ylabel("per-solve total time (ms)")
+    axes[0].set_ylabel("per-solve execution time (ms)")
     out_lat = output_dir / "threading-latency.pdf"
     save_figure(fig, out_lat)
     out_paths.append(out_lat)
