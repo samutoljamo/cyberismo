@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -38,6 +39,11 @@ namespace node_clingo
         std::vector<Clingo::AST::Node> ast_nodes; // Pre-parsed AST; empty = text fallback
         std::vector<KeyHash> categories;
         Hash hash;
+        // Serializes replay (ProgramBuilder::add) of this program's AST nodes:
+        // clingo's AST reference counts are not atomic, so concurrent replay
+        // of the same tree is unsafe. Trees are private per Program (deep_copy
+        // in tryParseToAst), which is what makes a per-program lock sufficient.
+        mutable std::mutex ast_mutex;
         Program(
             std::string key_,
             std::string content_,
