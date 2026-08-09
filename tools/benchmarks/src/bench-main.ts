@@ -30,8 +30,9 @@
 import { CommandManager } from '@cyberismo/data-handler';
 import type { ClingoContext } from '@cyberismo/node-clingo';
 import { lpFiles } from '@cyberismo/assets';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import Handlebars from 'handlebars';
 import { solveBinary, solveAspifWithQuery } from './binary-baseline.js';
 import {
@@ -337,23 +338,37 @@ async function runFixture(
     // Runs before c-api+preparsing because incremental uses the binary path
     // and is independent of the in-process ClingoContext state.
     console.error('  variant: incremental');
-    const aspifPath = incrementalAspifPath(bundle);
-    for (const queryName of queries) {
-      const specificQuery = bundle.queries[queryName];
-      if (!specificQuery) continue;
-      const queryProgram =
-        lpFiles.common.queryLanguage +
-        '\n' +
-        lpFiles.common.utils +
-        '\n' +
-        specificQuery;
-      for (let run = 1; run <= RUNS_PER_POINT; run++) {
-        const r = await solveAspifWithQuery(aspifPath, queryProgram);
-        allRuns.push(
-          makeIncrementalRun(queryName, cardCount, run, projectId, r.clingoMs),
-        );
+    // Stage the ASPIF in the OS tmpdir (tmpfs on the bench machines) so
+    // clingo reads it from memory like every other CLI input.
+    const aspifTmpDir = await mkdtemp(join(tmpdir(), 'clingo-aspif-'));
+    const aspifPath = join(aspifTmpDir, 'incremental-base.aspif');
+    await copyFile(incrementalAspifPath(bundle), aspifPath);
+    try {
+      for (const queryName of queries) {
+        const specificQuery = bundle.queries[queryName];
+        if (!specificQuery) continue;
+        const queryProgram =
+          lpFiles.common.queryLanguage +
+          '\n' +
+          lpFiles.common.utils +
+          '\n' +
+          specificQuery;
+        for (let run = 1; run <= RUNS_PER_POINT; run++) {
+          const r = await solveAspifWithQuery(aspifPath, queryProgram);
+          allRuns.push(
+            makeIncrementalRun(
+              queryName,
+              cardCount,
+              run,
+              projectId,
+              r.clingoMs,
+            ),
+          );
+        }
+        console.error(`    ${queryName}: ${RUNS_PER_POINT} runs done`);
       }
-      console.error(`    ${queryName}: ${RUNS_PER_POINT} runs done`);
+    } finally {
+      await rm(aspifTmpDir, { recursive: true, force: true });
     }
 
     // ── VARIANT: c-api+preparsing (native + current QL + pre-parsing) ─────
