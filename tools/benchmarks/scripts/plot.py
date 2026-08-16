@@ -65,6 +65,32 @@ VARIANT_ORDER_MAIN = [
     "incremental",
 ]
 
+# Stable marker mapping per variant, so series identity survives greyscale
+# printing and colour-vision deficiency. Fixed like VARIANT_COLOURS: the same
+# variant always gets the same marker in every figure.
+VARIANT_MARKERS: dict[str, str] = {
+    # main-scaling
+    "baseline":              "o",
+    "baseline+resultfield":  "s",
+    "c-api":                 "^",
+    "c-api+resultfield":     "D",
+    "c-api+preparsing":      "v",
+    "incremental":           "P",
+    # caching
+    "cache-disabled":        "o",
+    "cache-miss":            "^",
+    "cache-hit":             "s",
+}
+
+# Linestyles are only differentiated where curves are expected to overlap
+# almost exactly (the caching figures, whose whole point is coincidence):
+# distinct dashes prove all series are present even when they coincide.
+VARIANT_LINESTYLES: dict[str, str] = {
+    "cache-disabled": "-",
+    "cache-miss":     "--",
+    "cache-hit":      ":",
+}
+
 VARIANT_ORDER_CACHING = ["cache-disabled", "cache-enabled", "cache-miss", "cache-hit"]
 
 # Figures label Clingo builds by release; results keep the internal
@@ -92,6 +118,10 @@ PHASE_COLOURS = {
 plt.rcParams.update({
     "figure.dpi": 100,
     "savefig.dpi": 200,
+    # Deterministic ids in SVG output so re-running the script on unchanged
+    # data produces byte-identical SVGs (matplotlib defaults to a random
+    # uuid salt, which makes every regeneration churn in git).
+    "svg.hashsalt": "cyberismo-bench",
     "axes.grid": True,
     "grid.alpha": 0.3,
     "grid.linestyle": ":",
@@ -160,6 +190,14 @@ def variant_colour(variant: str) -> str:
     return VARIANT_COLOURS.get(variant, "#444444")
 
 
+def variant_marker(variant: str) -> str:
+    return VARIANT_MARKERS.get(variant, "o")
+
+
+def variant_linestyle(variant: str) -> str:
+    return VARIANT_LINESTYLES.get(variant, "-")
+
+
 def project_pretty(name: str) -> str:
     """Pretty-print project prefix for axis titles."""
     mapping = {
@@ -195,9 +233,20 @@ def line_with_band(
     *,
     label: str,
     colour: str,
+    marker: str = "o",
+    linestyle: str = "-",
 ) -> None:
     """Plot a mean line with a 1-σ shaded band."""
-    ax.plot(x, mean, label=label, color=colour, linewidth=1.6, marker="o", markersize=3)
+    ax.plot(
+        x,
+        mean,
+        label=label,
+        color=colour,
+        linewidth=1.6,
+        marker=marker,
+        markersize=4,
+        linestyle=linestyle,
+    )
     ax.fill_between(x, mean - std, mean + std, color=colour, alpha=0.18, linewidth=0)
 
 
@@ -332,6 +381,8 @@ def plot_caching(results_dir: Path, output_dir: Path) -> list[Path]:
                 agg["std"].to_numpy(),
                 label=variant,
                 colour=variant_colour(variant),
+                marker=variant_marker(variant),
+                linestyle=variant_linestyle(variant),
             )
         panel_title(ax, project, panels)
         ax.set_xlabel("cards")
@@ -369,10 +420,24 @@ def plot_caching(results_dir: Path, output_dir: Path) -> list[Path]:
         ax.set_xscale("log")
         ax.set_yscale("log")
         # The data spans less than a decade, so the default log locator
-        # labels at most two points; add intra-decade ticks so the peak and
-        # plateau have readable y references.
-        ax.yaxis.set_major_locator(ticker.LogLocator(base=10, subs=(1.0, 1.5, 2.0, 3.0, 4.0, 6.0)))
+        # labels at most two points. LogLocator with intra-decade subs prunes
+        # unpredictably (one panel previously rendered with a single labeled
+        # tick), so pick explicit ticks from a 1-1.5-2-3-4-6 progression
+        # around the data range and pin them with FixedLocator. The y-limits
+        # are set explicitly to cover the tick list, because matplotlib
+        # silently drops ticks outside the autoscaled view interval.
+        lo = float(joined["speedup"].min())
+        hi = float(joined["speedup"].max())
+        candidates = [
+            m * 10**e
+            for e in range(0, 5)
+            for m in (1.0, 1.5, 2.0, 3.0, 4.0, 6.0)
+        ]
+        yticks = [t for t in candidates if lo / 1.2 <= t <= hi * 1.2]
+        ax.set_ylim(min(lo, *yticks) / 1.05, max(hi, *yticks) * 1.05)
+        ax.yaxis.set_major_locator(ticker.FixedLocator(yticks))
         ax.yaxis.set_major_formatter(ticker.ScalarFormatter())
+        ax.yaxis.set_minor_locator(ticker.NullLocator())
         ax.yaxis.set_minor_formatter(ticker.NullFormatter())
 
     out = output_dir / "caching-hit-speedup.pdf"
@@ -403,6 +468,8 @@ def plot_caching(results_dir: Path, output_dir: Path) -> list[Path]:
                 agg["std"].to_numpy(),
                 label=variant,
                 colour=variant_colour(variant),
+                marker=variant_marker(variant),
+                linestyle=variant_linestyle(variant),
             )
         panel_title(ax, project, panels)
         ax.set_xlabel("cards")
@@ -670,7 +737,13 @@ def _decide_log_y(values: np.ndarray) -> bool:
 def _plot_main_query_scaling(
     df: pd.DataFrame, query_name: str, output_dir: Path, slug: str
 ) -> Path | None:
-    """Per-query scaling plot. Returns None if no records for this query."""
+    """Per-query scaling plot. Returns None if no records for this query.
+
+    The scale grid is log-spaced (10 … 50 000), so the x-axis is logarithmic;
+    a linear axis would squeeze most of the grid into the left edge. The
+    y-axis switches to log when the measured dynamic range warrants it
+    (`_decide_log_y`), which makes the near-linear scaling read as slope ~1.
+    """
     sub = df[df["query"] == query_name].copy()
     if sub.empty:
         return None
@@ -691,11 +764,17 @@ def _plot_main_query_scaling(
                 agg["std"].to_numpy(),
                 label=variant,
                 colour=variant_colour(variant),
+                marker=variant_marker(variant),
             )
             all_means.extend(agg["mean"].tolist())
         panel_title(ax, project, panels)
         ax.set_xlabel("cards")
         ax.set_ylabel("total time (ms)")
+        ax.set_xscale("log")
+
+    if _decide_log_y(np.asarray(all_means)):
+        for ax in panels.values():
+            ax.set_yscale("log")
 
     place_legend_below(fig, panels.values(), ncol=3)
     out = output_dir / f"main-{slug}-scaling.pdf"
@@ -706,7 +785,12 @@ def _plot_main_query_scaling(
 def _plot_main_query_speedup(
     df: pd.DataFrame, query_name: str, output_dir: Path, slug: str
 ) -> Path | None:
-    """Per-query speedup vs baseline plot. Returns None if no data."""
+    """Per-query speedup vs baseline plot. Returns None if no data.
+
+    Log x for the same reason as the scaling plot; the ratio axis stays
+    linear (the observed range is well under a decade) with the y=1
+    reference line marking parity with the baseline.
+    """
     sub = df[df["query"] == query_name].copy()
     if sub.empty:
         return None
@@ -748,11 +832,13 @@ def _plot_main_query_speedup(
                 joined["speedup_std"].to_numpy(),
                 label=variant,
                 colour=variant_colour(variant),
+                marker=variant_marker(variant),
             )
         ax.axhline(1.0, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
         panel_title(ax, project, panels)
         ax.set_xlabel("cards")
         ax.set_ylabel("speedup vs. baseline (×)")
+        ax.set_xscale("log")
 
     place_legend_below(fig, panels.values(), ncol=3)
     out = output_dir / f"main-{slug}-speedup.pdf"
@@ -761,94 +847,16 @@ def _plot_main_query_speedup(
 
 
 def plot_main_tree_scaling(df: pd.DataFrame, output_dir: Path) -> Path:
-    sub = df[df["query"] == "tree"].copy()
-    if sub.empty:
+    out = _plot_main_query_scaling(df, "tree", output_dir, "tree")
+    if out is None:
         raise SystemExit("main.json had no tree query records")
-
-    fig, panels = project_panels(sub, figsize=(5.5 * max(len(sub["project"].unique()), 1), 4.2))
-    all_means: list[float] = []
-    for project, ax in panels.items():
-        psub = sub[sub["project"] == project]
-        for variant in VARIANT_ORDER_MAIN:
-            cell = psub[psub["variant"] == variant]
-            if cell.empty:
-                continue
-            agg = aggregate_runs(cell, ["cardCount"]).sort_values("cardCount")
-            line_with_band(
-                ax,
-                agg["cardCount"].to_numpy(),
-                agg["mean"].to_numpy(),
-                agg["std"].to_numpy(),
-                label=variant,
-                colour=variant_colour(variant),
-            )
-            all_means.extend(agg["mean"].tolist())
-        panel_title(ax, project, panels)
-        ax.set_xlabel("cards")
-        ax.set_ylabel("total time (ms)")
-
-    place_legend_below(fig, panels.values(), ncol=3)
-    out = output_dir / "main-tree-scaling.pdf"
-    save_figure(fig, out)
     return out
 
 
 def plot_main_tree_speedup(df: pd.DataFrame, output_dir: Path) -> Path:
-    sub = df[df["query"] == "tree"].copy()
-    if sub.empty:
+    out = _plot_main_query_speedup(df, "tree", output_dir, "tree")
+    if out is None:
         raise SystemExit("main.json had no tree query records")
-
-    fig, panels = project_panels(sub, figsize=(5.5 * max(len(sub["project"].unique()), 1), 4.2))
-    other_variants = [v for v in VARIANT_ORDER_MAIN if v != "baseline"]
-
-    for project, ax in panels.items():
-        psub = sub[sub["project"] == project]
-        baseline = psub[psub["variant"] == "baseline"]
-        if baseline.empty:
-            panel_title(ax, project, panels, suffix=" — no baseline")
-            continue
-        baseline_stats = (
-            baseline.groupby("cardCount")["totalMs"]
-            .agg(baselineMs="mean", baselineStd="std")
-        )
-        baseline_stats["baselineStd"] = baseline_stats["baselineStd"].fillna(0.0)
-        for variant in other_variants:
-            cell = psub[psub["variant"] == variant]
-            if cell.empty:
-                continue
-            # Per-run speedup is more honest than ratio of means; here we use
-            # variant-mean / baseline-mean per scale point because the runs
-            # are not paired across variants.
-            variant_stats = cell.groupby("cardCount")["totalMs"].agg(["mean", "std"])
-            variant_stats["std"] = variant_stats["std"].fillna(0.0)
-            joined = variant_stats.join(baseline_stats, how="inner")
-            joined["speedup"] = joined["baselineMs"] / joined["mean"]
-            # Ratio-of-means uncertainty: r * sqrt((sb/b)**2 + (sv/v)**2)
-            joined["speedup_std"] = (
-                joined["speedup"]
-                * np.sqrt(
-                    (joined["baselineStd"] / joined["baselineMs"]) ** 2
-                    + (joined["std"] / joined["mean"]) ** 2
-                )
-            ).fillna(0.0)
-            joined = joined.drop(columns=["baselineMs", "baselineStd"])
-            x = joined.index.to_numpy()
-            line_with_band(
-                ax,
-                x,
-                joined["speedup"].to_numpy(),
-                joined["speedup_std"].to_numpy(),
-                label=variant,
-                colour=variant_colour(variant),
-            )
-        ax.axhline(1.0, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
-        panel_title(ax, project, panels)
-        ax.set_xlabel("cards")
-        ax.set_ylabel("speedup vs. baseline (×)")
-
-    place_legend_below(fig, panels.values(), ncol=3)
-    out = output_dir / "main-tree-speedup.pdf"
-    save_figure(fig, out)
     return out
 
 
