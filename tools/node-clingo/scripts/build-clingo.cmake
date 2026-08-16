@@ -6,11 +6,17 @@ get_filename_component(ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(SOURCE_DIR "${ROOT_DIR}/external/clingo")
 set(BUILD_DIR  "${SOURCE_DIR}/build")
 
+set(SHARD_ARGS "")
+if(DEFINED ENV{CLINGO_MAP_NUM_SHARDS} AND NOT "$ENV{CLINGO_MAP_NUM_SHARDS}" STREQUAL "")
+  list(APPEND SHARD_ARGS "-DCLINGO_MAP_NUM_SHARDS=$ENV{CLINGO_MAP_NUM_SHARDS}")
+endif()
+
 message(STATUS "Configuring clingo...")
 execute_process(
   COMMAND "${CMAKE_COMMAND}"
     "-S${SOURCE_DIR}"
     "-B${BUILD_DIR}"
+    ${SHARD_ARGS}
     "-DCMAKE_BUILD_TYPE=Release"
     "-DCMAKE_POLICY_DEFAULT_CMP0091=NEW"
     "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"

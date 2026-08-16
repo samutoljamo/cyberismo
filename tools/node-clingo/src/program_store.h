@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -38,6 +39,11 @@ namespace node_clingo
         std::vector<Clingo::AST::Node> ast_nodes; // Pre-parsed AST; empty = text fallback
         std::vector<KeyHash> categories;
         Hash hash;
+        // Serializes replay (ProgramBuilder::add) of this program's AST nodes:
+        // clingo's AST reference counts are not atomic, so concurrent replay
+        // of the same tree is unsafe. Trees are private per Program (deep_copy
+        // in tryParseToAst), which is what makes a per-program lock sufficient.
+        mutable std::mutex ast_mutex;
         Program(
             std::string key_,
             std::string content_,
@@ -94,9 +100,16 @@ namespace node_clingo
          * Prepares a query for the program store
          * @param query The query
          * @param categories The categories
+         * @param computeHash When true (default), computes the cache key hash over
+         *        the assembled programs. When false, skips the XXHash work entirely
+         *        and leaves Query::hash zero — useful when the caller has opted out
+         *        of the result cache for this call.
          * @returns The query
          */
-        Query prepareQuery(const std::string& query, const std::vector<std::string>& categories);
+        Query prepareQuery(
+            const std::string& query,
+            const std::vector<std::string>& categories,
+            bool computeHash = true);
     };
 
 } // namespace node_clingo
